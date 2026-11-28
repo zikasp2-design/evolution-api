@@ -1,19 +1,29 @@
-FROM evoapicloud/evolution-api:latest AS base
+
+FROM evoapicloud/evolution-api:v2.3.7 AS base
+
 WORKDIR /evolution
 
-# Copiamos apenas o necessário para recompilar o dist com as mudanças locais
 COPY tsconfig.json tsup.config.ts package.json ./
 COPY src ./src
 
-# Recompila usando os node_modules já presentes na imagem base
 RUN npm run build
 
-# Runtime final: reaproveita a imagem oficial e apenas sobrepõe o dist
-FROM evoapicloud/evolution-api:latest AS final
+# Gera o Prisma Client durante a construção da imagem
+RUN DATABASE_PROVIDER=postgresql npm run db:generate
+
+
+FROM evoapicloud/evolution-api:v2.3.7 AS final
+
 WORKDIR /evolution
+
+# Código recompilado
 COPY --from=base /evolution/dist ./dist
 
-ENV PROMETHEUS_METRICS=true
+# Scripts atualizados
+COPY --from=base /evolution/package.json ./package.json
 
-# Entrada original da imagem oficial já sobe o app em /evolution
+# Prisma Client gerado na etapa de construção
+COPY --from=base /evolution/node_modules/.prisma ./node_modules/.prisma
 
+# Migrações e inicialização
+ENTRYPOINT ["/bin/bash", "-c", "export DATABASE_URL=\"${DATABASE_URL:-$DATABASE_CONNECTION_URI}\"; if [ -z \"$DATABASE_URL\" ]; then echo 'ERRO: DATABASE_URL nao configurada'; exit 1; fi; npm run db:deploy && exec npm run start:prod"]
